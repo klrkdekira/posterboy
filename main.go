@@ -139,7 +139,7 @@ func processState(state string) <-chan bool {
 }
 
 func (j *Jobs) execute(target string) error {
-	<-time.After(1 * time.Second)
+	// <-time.After(1 * time.Second)
 	fmt.Printf("doing %s...\n", target)
 	doc, err := download(target)
 	if err != nil {
