@@ -139,6 +139,7 @@ func processState(state string) <-chan bool {
 }
 
 func (j *Jobs) execute(target string) error {
+	// you wish
 	// <-time.After(1 * time.Second)
 	fmt.Printf("doing %s...\n", target)
 	doc, err := download(target)
@@ -150,6 +151,7 @@ func (j *Jobs) execute(target string) error {
 	addresses := make([]*Address, 0)
 	table.Find("tbody tr").Each(func(i int, s *goquery.Selection) {
 		children := s.Children()
+		// TODO need to trim these hairy dudes
 		address := &Address{
 			No:         children.Eq(0).Text(),
 			Location:   children.Eq(1).Text(),
