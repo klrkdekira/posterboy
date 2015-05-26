@@ -1,13 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -22,8 +25,8 @@ type (
 	}
 
 	Jobs struct {
-		WorkList  map[string]bool
 		Addresses []*Address
+		CheckList map[string]bool
 		*sync.Mutex
 	}
 )
@@ -41,39 +44,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	<-processState(states[0])
-	// var wg sync.WaitGroup
-	// statesChan := make(chan string, len(states))
-	// for _, s := range states {
-	// 	wg.Add(1)
-	// 	statesChan <- s
-	// }
+	// yeah I said so
+	os.MkdirAll("downloads", 0755)
 
-	// for i := 0; i < t; i++ {
-	// 	go func(statesChan chan string) {
-	// 		for {
-	// 			select {
-	// 			case state := <-statesChan:
-	// 				success := <-processState(state)
-	// 				if !success {
-	// 					fmt.Printf("failed while processing %s, retrying in 5 seconds...\n", state)
-	// 					statesChan <- state
-	// 					<-time.After(5 * time.Second)
-	// 				} else {
-	// 					wg.Done()
-	// 				}
-	// 			}
-	// 		}
-	// 	}(statesChan)
-	// }
-	// wg.Wait()
+	var wg sync.WaitGroup
+	statesChan := make(chan string, len(states))
+	for _, s := range states {
+		wg.Add(1)
+		statesChan <- s
+	}
+
+	for i := 0; i < t; i++ {
+		go func(statesChan chan string) {
+			for {
+				select {
+				case state := <-statesChan:
+					success := <-processState(state)
+					if !success {
+						fmt.Printf("failed while processing %s, retrying in 5 seconds...\n", state)
+						statesChan <- state
+						<-time.After(5 * time.Second)
+					} else {
+						wg.Done()
+					}
+				}
+			}
+		}(statesChan)
+	}
+	wg.Wait()
 }
 
 func getStates() ([]string, error) {
 	states := make([]string, 0)
 
-	url := fmt.Sprintf("%s?postcode-finder", endpoint)
-	doc, err := download(url)
+	target := fmt.Sprintf("%s?postcode-finder", endpoint)
+	doc, err := download(target)
 	if err != nil {
 		return states, err
 	}
@@ -93,39 +98,50 @@ func getStates() ([]string, error) {
 }
 
 func processState(state string) <-chan bool {
-	resp := make(chan bool, 1)
 	fmt.Printf("processing... %s\n", state)
 
 	jobs := &Jobs{
-		WorkList: make(map[string]bool),
-		Address:  make([]*Address, 0),
-		Mutex:    &sync.Mutex{},
+		Addresses: make([]*Address, 0),
+		CheckList: make(map[string]bool),
+		Mutex:     &sync.Mutex{},
 	}
 
 	params := url.Values{}
 	params.Set("postcodeFinderState", state)
 	params.Set("postcodeFinderLocation", "")
 	params.Set("page", "1")
-	url := fmt.Sprintf("%s?%s", endpoint, params.Encode())
-	jobs.WorkList[url] = false
+	target := fmt.Sprintf("%s?%s", endpoint, params.Encode())
 
-	if err := processStatePage(url, jobs); err != nil {
-		for u, ok := range jobs.WorkList {
-			if !ok {
-				if err := processState(url, jobs); err == nil {
-					break
-				}
-			}
+	jobs.CheckList[target] = false
+	for {
+		if err := jobs.execute(target); err == nil {
+			break
 		}
-	} else {
-		resp <- true
 	}
 
+	resp := make(chan bool, 1)
+
+	b, err := json.Marshal(jobs.Addresses)
+	if err != nil {
+		fmt.Println(err)
+		resp <- false
+		return resp
+	}
+
+	if err := ioutil.WriteFile(fmt.Sprintf("downloads/%s.json", state), b, 0755); err != nil {
+		fmt.Println(err)
+		resp <- false
+		return resp
+	}
+
+	resp <- true
 	return resp
 }
 
-func processStatePage(url string, jobs *Jobs) error {
-	doc, err := download(url)
+func (j *Jobs) execute(target string) error {
+	<-time.After(1 * time.Second)
+	fmt.Printf("doing %s...\n", target)
+	doc, err := download(target)
 	if err != nil {
 		return err
 	}
@@ -144,32 +160,33 @@ func processStatePage(url string, jobs *Jobs) error {
 		addresses = append(addresses, address)
 	})
 
-	jobs.Addresses = append(jobs.Addresses, addresses...)
+	j.Mutex.Lock()
+	j.Addresses = append(j.Addresses, addresses...)
+	j.CheckList[target] = true
+	j.Mutex.Unlock()
 
 	links := table.Find("tfoot a")
 	for i := range links.Nodes {
 		s := links.Eq(i)
 		href, _ := s.Attr("href")
-		url := host + href
-		if done, found := jobs.WorkList[url]; !found {
-			jobs.WorkList[url] = false
-		} else {
-			if done {
-				// skipping this hell
-				return
+		newTarget := host + href
+
+		if _, found := j.CheckList[newTarget]; !found {
+			j.Mutex.Lock()
+			j.CheckList[newTarget] = false
+			j.Mutex.Unlock()
+			if err := j.execute(newTarget); err != nil {
+				return err
 			}
 		}
-		if err := processState(url, jobs); err != nil {
-			return err
-		}
 	}
-	jobs.WorkList[url] = true
+
 	return nil
 }
 
-func download(url string) (*goquery.Document, error) {
+func download(target string) (*goquery.Document, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", target, nil)
 	if err != nil {
 		return nil, err
 	}
