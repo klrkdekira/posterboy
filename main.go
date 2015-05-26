@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -13,11 +12,21 @@ import (
 const endpoint = "http://www.pos.com.my/postal-services/quick-access"
 
 func main() {
-	_, err := getStates()
+	states, err := getStates()
 	if err != nil {
 		fmt.Println("failed to get state options")
 		os.Exit(1)
 	}
+
+	statesChan := make(chan string)
+	for _, s := range states {
+		statesChan <- s
+	}
+
+	for _ = range states {
+		fmt.Println(<-statesChan)
+	}
+
 	// fmt.Print(states)
 }
 
@@ -25,54 +34,38 @@ func getStates() ([]string, error) {
 	states := make([]string, 0)
 
 	url := fmt.Sprintf("%s?postcode-finder", endpoint)
-	body, err := download(url)
+	doc, err := download(url)
 	if err != nil {
 		return states, err
 	}
 
-	doc, err := goquery.NewDocument(string(body))
-	if err != nil {
-		log.Print(err)
-		return states, err
-	}
+	uniqueCell := map[string]struct{}{}
 
-	// options := doc.Find("select#postcode-finder-state-select option")
-	options := doc.Find("option")
-	for n := range options.Nodes {
-		fmt.Println(n)
-		fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-	}
-	// fmt.Println(options.Nodes)
-	// for n := range options.Nodes {
+	slct := doc.Find("select#postcode-finder-state-select").First()
+	slct.Find("option:not([selected])").Each(func(i int, s *goquery.Selection) {
+		uniqueCell[strings.Trim(s.Text(), " ")] = struct{}{}
+	})
 
-	// }
-	// .Each(func(i int, s *goquery.Selection) {
-	// 	fmt.Println(s)
-	// })
+	for k, _ := range uniqueCell {
+		states = append(states, k)
+	}
 
 	return states, nil
 }
 
-func download(url string) ([]byte, error) {
-	var body []byte
-	var err error
-
+func download(url string) (*goquery.Document, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return body, err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "posterchild")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return body, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return body, err
-	}
-	return body, err
+	return goquery.NewDocumentFromResponse(resp)
 }
