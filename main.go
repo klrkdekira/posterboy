@@ -85,7 +85,7 @@ func getStates() ([]string, error) {
 
 	uniqueCell := map[string]struct{}{}
 
-	slct := doc.Find("select#postcode-finder-state-select").First()
+	slct := doc.Find("select#find-outlet-state-select").First()
 	slct.Find("option:not([selected])").Each(func(i int, s *goquery.Selection) {
 		uniqueCell[strings.Trim(s.Text(), " ")] = struct{}{}
 	})
